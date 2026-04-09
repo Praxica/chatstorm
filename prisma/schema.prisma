@@ -1,0 +1,748 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider     = "postgresql"
+  url          = env("DATABASE_URL")
+  relationMode = "prisma"
+}
+
+model Config {
+  id                String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  createdAt         DateTime                @default(now()) @db.Timestamp(6)
+  lastUpdatedAt     DateTime                @default(now()) @updatedAt @db.Timestamptz(6)
+  title             String
+  userId            String                  @db.Uuid
+  chatInstructions  String?
+  examplePrompts    String[]                @default([])
+  retentionSettings Json?                   @db.Json
+  memorySettings    Json?                   @db.Json
+  designSettings    Json?                   @db.Json  // UI/design settings like showRoundTitles
+  spaceId           String?                 @db.Uuid  // null = personal config, set = space config
+  previewChatId     String?                 @db.Uuid  // Reference to preview chat (no FK constraint to avoid cycle)
+  rounds            ChatRound[]
+  chats             Chat[]
+  projects          Project[]               @relation("ConfigProjects")
+  user              User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  space             Spaces?                 @relation("SpaceConfigs", fields: [spaceId], references: [id], onDelete: Cascade)
+  shareInvitations  ConfigShareInvitation[]
+  batches           ChatBatch[]
+  templates         Template[]
+  templateInstalls  TemplateInstall[]
+
+  @@index([userId])
+  @@index([spaceId])
+  @@index([previewChatId])
+}
+
+model Message {
+  id                 String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  chatId             String             @db.Uuid
+  role               String             @db.VarChar
+  content            Json               @db.Json
+  createdAt          DateTime           @db.Timestamp(6)
+  agentId            String?
+  branchId           String             @db.Uuid
+  isActive           Boolean            @default(true)
+  branchPath         String[]
+  annotations        Json[]             @default([]) @db.Json
+  metadata           Json               @default("{}") @db.Json
+  completionTokens   Int?
+  promptTokens       Int?
+  totalTokens        Int?
+  chatRoundSessionId String?            @db.Uuid
+  parentMessageId    String?            @db.Uuid
+  chat               Chat               @relation("ChatMessages", fields: [chatId], references: [id], onDelete: Cascade)
+  branch             Branch             @relation("BranchMessages", fields: [branchId], references: [id], onDelete: Cascade)
+  shares             Share[]            @relation("ShareLastMessage")
+  dataValues         MessageDataValue[] @relation("MessageDataValues")
+  chatRoundSession   ChatRoundSession?  @relation("SessionMessages", fields: [chatRoundSessionId], references: [id])
+  parentMessage      Message?           @relation("MessageReplies", fields: [parentMessageId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  replies            Message[]          @relation("MessageReplies")
+  memories           ChatMemory[]       @relation("MessageMemories")
+
+  @@index([chatId])
+  @@index([branchId])
+  @@index([parentMessageId])
+}
+
+model MessageDataValue {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  messageId String   @db.Uuid
+  roundId   String?  @db.Uuid
+  name      String
+  dataType  String
+  value     Json     @db.Json
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  message   Message  @relation("MessageDataValues", fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
+  @@index([dataType])
+  @@index([roundId])
+}
+
+model User {
+  email            String                  @db.VarChar(64)
+  password         String?                 @db.VarChar(64)
+  externalId       String?                 @unique @db.VarChar(255)
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
+  id               String                  @id @db.Uuid
+  capabilities     UserCapabilities?
+  configs          Config[]
+  chats            Chat[]
+  projects         Project[]
+  chatAgents       ChatAgent[]
+  shares           Share[]                 @relation("UserShares")
+  sentInvitations  ConfigShareInvitation[] @relation("SentInvitations")
+  tokenUsage       UserTokenUsage?
+  spaceTokenUsages SpaceTokenUsage[]
+  batches          ChatBatch[]
+  templates        Template[]
+  templateInstalls TemplateInstall[]
+  customModels     CustomModel[]
+  ownedSpaces      Spaces[]                // Spaces they own
+  spaceMemberships SpaceMembers[]          // Spaces they're members of
+}
+
+model UserCapabilities {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  isBuilder     Boolean  @default(false)
+  isChatUser    Boolean  @default(true)
+  features      Json     @default("{}")
+  metadata      Json     @default("{}")
+  modelSettings Json     @default("{\"mode\": \"all\", \"defaultModel\": null, \"excludedModels\": [], \"includedModels\": []}")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  userId        String   @unique @db.Uuid
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model ChatAgent {
+  id                 String            @id
+  name               String
+  role               String
+  systemPrompt       String
+  priority           String
+  avatar             String?
+  model              String?
+  temperature        Float?
+  isActive           Boolean           @default(true)
+  userId             String            @db.Uuid
+  modelSelectionMode String?           @default("default")
+  selectedModels     String[]          @default([])
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @default(now()) @updatedAt
+  chatRoundSessionId String?           @db.Uuid
+  isDynamic          Boolean           @default(false)
+  rounds             ChatRound[]       @relation("RoundParticipants")
+  stances            RoundStance[]
+  projects           Project[]         @relation("AgentProjects")
+  user               User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chatRoundSession   ChatRoundSession? @relation("SessionAgents", fields: [chatRoundSessionId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([chatRoundSessionId])
+}
+
+model ChatRound {
+  id                                 String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  configId                           String                 @db.Uuid
+  type                               RoundType
+  depth                              DepthLevel
+  lengthType                         LengthType
+  lengthNumber                       Int?
+  lengthRounds                       Int?
+  sequence                           Int
+  createdAt                          DateTime               @default(now()) @db.Timestamptz(6)
+  updatedAt                          DateTime               @default(now()) @db.Timestamptz(6)
+  stanceType                         String?
+  outputNumber                       Int?
+  creativityNumber                   Float?
+  creativityType                     String                 @default("agent")
+  instructions                       String?
+  showPrompts                        Boolean                @default(false)
+  name                               String?
+  icon                               String?                // Custom icon name (overrides type-based icon)
+  agentQuestions                     Boolean                @default(false)
+  agentSelfReflection                Boolean                @default(false)
+  modelSelectionMode                 String                 @default("agent")
+  selectedModel                      String?
+  participantOrder                   ParticipantOrder       @default(default)
+  transition                         TransitionType         @default(user)
+  action                             RoundActionType?
+  moderatorAgentId                   String?
+  agentIsolation                     Boolean                @default(false)
+  isPrivate                          Boolean                @default(false)
+  dataTool                           Json?                  @db.Json
+  retentionSettings                  Json?                  @db.Json
+  lengthModerator                    String?
+  lengthPrompt                       String?
+  participantOrderPrompt             String?
+  participantGenerationPrompt        String?
+  participantLength                  Int?
+  participantLengthType              ParticipantLengthType? @default(FIXED)
+  participantMode                    ParticipantMode?       @default(SELECT)
+  dialogueInitialMessage             String?
+  dialogueInitialMessageInstructions String?
+  dialogueInitialMessageMode         MessageGenerationMode?
+  dialogueInstructions               String?
+  dialogueInstructionsMode           MessageGenerationMode?
+  dialogueInstructionsPrompt         String?
+  dialogueLength                     Int?
+  dialogueLengthInstructions         String?
+  dialogueLengthMode                 DialogueLengthMode?
+  dialogueLengthModerator            String?
+  dialogueReceiverInstructions       String?
+  dialogueReceiverMode               DialogueMode?
+  dialogueReceiverModerator          String?
+  dialogueSelectedReceivers          String[]               @default([])
+  dialogueSelectedSenders            String[]               @default([])
+  dialogueSenderInstructions         String?
+  dialogueSenderMode                 DialogueMode?
+  dialogueSenderModerator            String?
+  messageSenderMode                  DialogueMode?
+  messageSenderInstructions          String?
+  messageSenderModerator             String?
+  transitionModerator                String?
+  transitionPrompt                   String?
+  transitionConditions               Json?                  @db.Json
+  config                             Config                 @relation(fields: [configId], references: [id], onDelete: Cascade)
+  stances                            RoundStance[]
+  participants                       ChatAgent[]            @relation("RoundParticipants")
+  memories                           ChatMemory[]           @relation("RoundMemories")
+
+  @@index([configId])
+}
+
+model RoundStance {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  roundId   String    @db.Uuid
+  agentId   String
+  stance    String    @db.VarChar
+  createdAt DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(6)
+  round     ChatRound @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  agent     ChatAgent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@unique([roundId, agentId])
+  @@index([roundId])
+  @@index([agentId])
+}
+
+model Branch {
+  id             String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  chatId         String     @db.Uuid
+  parentBranchId String?    @db.Uuid
+  name           String
+  type           BranchType
+  createdAt      DateTime   @default(now()) @db.Timestamptz(6)
+  chat           Chat       @relation("ChatBranches", fields: [chatId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  parentBranch   Branch?    @relation("BranchTree", fields: [parentBranchId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  childBranches  Branch[]   @relation("BranchTree")
+  messages       Message[]  @relation("BranchMessages")
+
+  @@index([chatId])
+  @@index([parentBranchId])
+}
+
+model Chat {
+  configId         String             @db.Uuid
+  title            String
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  activeBranch     String?            @db.Uuid
+  activeBranchPath String[]           @default([])
+  id               String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId           String             @db.Uuid
+  originType       ChatOriginType     @default(chat)
+  isPreview        Boolean            @default(false)
+  sourceChatId     String?            @db.Uuid
+  user             User               @relation(fields: [userId], references: [id])
+  config           Config             @relation(fields: [configId], references: [id])
+  messages         Message[]          @relation("ChatMessages")
+  branches         Branch[]           @relation("ChatBranches")
+  shares           Share[]            @relation("ChatShares")
+  batchChats       BatchChat[]
+  templatePreviews Template[]
+  roundSessions    ChatRoundSession[] @relation("ChatRoundSessions")
+  memories         ChatMemory[]       @relation("ChatMemories")
+
+  @@index([sourceChatId])
+}
+
+model ChatRoundSession {
+  id                 String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  chatId             String      @db.Uuid
+  roundId            String      @db.Uuid
+  startedAt          DateTime    @default(now()) @db.Timestamptz(6)
+  completedAt        DateTime?   @db.Timestamptz(6)
+  isActive           Boolean     @default(true)
+  compressionData    Json?       @db.Json
+  compressionVersion String?     @default("v1")
+  compressedAt       DateTime?   @db.Timestamptz(6)
+  messages           Message[]   @relation("SessionMessages")
+  dynamicAgents      ChatAgent[] @relation("SessionAgents")
+  chat               Chat        @relation("ChatRoundSessions", fields: [chatId], references: [id], onDelete: Cascade)
+
+  @@index([chatId])
+  @@index([roundId])
+  @@index([chatId, roundId, isActive])
+}
+
+model ChatMemory {
+  id               String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  chatId           String       @db.Uuid
+  memoryConfigId   String       // References memory config from Config.memorySettings
+  roundId          String       @db.Uuid
+  messageId        String       @db.Uuid
+  content          String       @db.Text
+  createdAt        DateTime     @default(now()) @db.Timestamptz(6)
+  createdByAgentId String?
+  version          Int
+  isActive         Boolean      @default(true)
+  chat             Chat         @relation("ChatMemories", fields: [chatId], references: [id], onDelete: Cascade)
+  round            ChatRound    @relation("RoundMemories", fields: [roundId], references: [id], onDelete: Cascade)
+  message          Message      @relation("MessageMemories", fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([chatId])
+  @@index([chatId, memoryConfigId, isActive])
+  @@index([chatId, memoryConfigId, version])
+  @@index([messageId])
+  @@index([roundId])
+}
+
+model Project {
+  id          String      @id @default(cuid())
+  name        String
+  description String?
+  createdAt   DateTime    @default(now())
+  userId      String      @db.Uuid
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  agents      ChatAgent[] @relation("AgentProjects")
+  configs     Config[]    @relation("ConfigProjects")
+
+  @@index([userId])
+}
+
+model AgentProjects {
+  A String
+  B String
+
+  @@id([A, B], map: "_AgentProjects_AB_pkey")
+  @@index([B], map: "_AgentProjects_B_index")
+  @@map("_AgentProjects")
+}
+
+model ConfigProjects {
+  A String @db.Uuid
+  B String
+
+  @@id([A, B], map: "_ConfigProjects_AB_pkey")
+  @@index([B], map: "_ConfigProjects_B_index")
+  @@map("_ConfigProjects")
+}
+
+model RoundParticipants {
+  A String
+  B String @db.Uuid
+
+  @@id([A, B], map: "_RoundParticipants_AB_pkey")
+  @@index([B], map: "_RoundParticipants_B_index")
+  @@map("_RoundParticipants")
+}
+
+model ConfigShareInvitation {
+  id             String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  configId       String           @db.Uuid
+  senderUserId   String           @db.Uuid
+  recipientEmail String
+  token          String           @unique
+  status         InvitationStatus @default(pending)
+  createdAt      DateTime         @default(now())
+  expiresAt      DateTime
+  acceptedAt     DateTime?
+  config         Config           @relation(fields: [configId], references: [id], onDelete: Cascade)
+  sender         User             @relation("SentInvitations", fields: [senderUserId], references: [id], onDelete: Cascade)
+
+  @@index([configId])
+  @@index([senderUserId])
+  @@index([token])
+}
+
+model Share {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  chatId         String   @db.Uuid
+  createdById    String   @db.Uuid
+  lastMessageId  String   @db.Uuid
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  lastAccessedAt DateTime @default(now())
+  accessCount    Int      @default(0)
+  chat           Chat     @relation("ChatShares", fields: [chatId], references: [id], onDelete: Cascade)
+  createdBy      User     @relation("UserShares", fields: [createdById], references: [id], onDelete: Cascade)
+  lastMessage    Message  @relation("ShareLastMessage", fields: [lastMessageId], references: [id])
+
+  @@index([chatId])
+  @@index([createdById])
+  @@index([lastMessageId])
+}
+
+model UserTokenUsage {
+  id                 String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId             String           @unique @db.Uuid
+  periodStartDate    DateTime         @db.Timestamptz(6)
+  periodEndDate      DateTime         @db.Timestamptz(6)
+  tokensUsedInPeriod Int              @default(0)
+  planId             String           @db.Uuid
+  user               User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan               SubscriptionPlan @relation(fields: [planId], references: [id])
+
+  @@index([userId])
+  @@index([planId])
+}
+
+model SubscriptionPlan {
+  id                String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name              String           @unique
+  monthlyTokenLimit Int
+  priceCents        Int
+  isActive          Boolean          @default(true)
+  userTokenUsages   UserTokenUsage[]
+}
+
+model ChatBatch {
+  id                          String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  configId                    String      @db.Uuid
+  userId                      String      @db.Uuid
+  name                        String
+  totalChats                  Int
+  completedChats              Int         @default(0)
+  status                      BatchStatus @default(PENDING)
+  initialMessage              String?
+  isInitialMessageAiGenerated Boolean     @default(false)
+  createdAt                   DateTime    @default(now()) @db.Timestamptz(6)
+  updatedAt                   DateTime    @default(now()) @updatedAt @db.Timestamptz(6)
+  batchMode                   BatchMode   @default(count)
+  roundMessages               Json?       @db.Json
+  variableData                Json?       @db.Json
+  config                      Config      @relation(fields: [configId], references: [id], onDelete: Cascade)
+  user                        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  batchChats                  BatchChat[]
+
+  @@index([configId])
+  @@index([userId])
+}
+
+model BatchChat {
+  id        String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  batchId   String          @db.Uuid
+  chatId    String          @db.Uuid
+  status    BatchChatStatus @default(PENDING)
+  createdAt DateTime        @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime        @default(now()) @updatedAt @db.Timestamptz(6)
+  batch     ChatBatch       @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  chat      Chat            @relation(fields: [chatId], references: [id], onDelete: Cascade)
+
+  @@index([batchId])
+  @@index([chatId])
+}
+
+model TemplateCategory {
+  id          String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String     @unique
+  description String?
+  createdAt   DateTime   @default(now())
+  templates   Template[]
+}
+
+model Template {
+  id            String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  configId      String            @db.Uuid
+  title         String
+  description   String?
+  tags          String[]
+  authorId      String            @db.Uuid
+  installs      Int               @default(0)
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  isPublic      Boolean           @default(false)
+  previewChatId String?           @db.Uuid
+  categoryId    String?           @db.Uuid
+  spaceId       String?           @db.Uuid  // null = public template, set = space template
+  config        Config            @relation(fields: [configId], references: [id], onDelete: Cascade)
+  author        User              @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  previewChat   Chat?             @relation(fields: [previewChatId], references: [id])
+  category      TemplateCategory? @relation(fields: [categoryId], references: [id])
+  space         Spaces?           @relation("SpaceTemplates", fields: [spaceId], references: [id], onDelete: Cascade)
+  installations TemplateInstall[]
+
+  @@index([authorId])
+  @@index([configId])
+  @@index([categoryId])
+  @@index([spaceId])
+}
+
+model TemplateInstall {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  templateId  String   @db.Uuid
+  userId      String   @db.Uuid
+  installedAt DateTime @default(now())
+  configId    String   @db.Uuid
+  template    Template @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  config      Config   @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  @@unique([templateId, userId])
+  @@index([templateId])
+  @@index([userId])
+  @@index([configId])
+}
+
+model CustomModel {
+  id        String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String?      @db.Uuid  // null for space models
+  spaceId   String?      @db.Uuid  // null for user models
+  name      String
+  provider  ProviderType
+  modelId   String
+  apiKey    String
+  baseURL   String?
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+  user      User?        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  space     Spaces?      @relation("SpaceCustomModels", fields: [spaceId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([spaceId])
+}
+
+enum InvitationStatus {
+  pending
+  accepted
+  declined
+  expired
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum RoundType {
+  debate
+  brainstorm
+  dialogue
+  explore
+  critique
+  review
+  survey
+  understand
+  custom
+}
+
+enum DepthLevel {
+  minimal
+  brief
+  medium
+  thorough
+  exhaustive
+  dynamic
+}
+
+enum LengthType {
+  total
+  rounds
+  moderator
+}
+
+enum RoundActionType {
+  summarize
+  winner
+  rank
+}
+
+enum BranchType {
+  retry
+  edit
+  variant
+  origin
+}
+
+enum ChatOriginType {
+  chat
+  copy
+  batch
+}
+
+enum ParticipantOrder {
+  default
+  random
+  handoff
+  moderator
+}
+
+enum TransitionType {
+  user
+  auto
+  conditional
+}
+
+enum BatchStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  CANCELLED
+}
+
+enum BatchMode {
+  count
+  json
+  csv
+}
+
+enum BatchChatStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum ProviderType {
+  openai
+  anthropic
+  google
+  xai
+  deepseek
+  groq
+  custom
+}
+
+enum ParticipantMode {
+  SELECT
+  GENERATE
+}
+
+enum ParticipantLengthType {
+  FIXED
+  AI_DECIDES
+}
+
+enum DialogueMode {
+  all_participants
+  select
+  agent_decides
+  moderator_decides
+}
+
+enum MessageGenerationMode {
+  manual
+  generate
+}
+
+enum DialogueLengthMode {
+  fixed
+  agent_decides
+  moderator_decides
+}
+
+// Spaces feature models
+model Spaces {
+  id                    String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                  String
+  slug                  String   @unique
+  description           String?
+  ownerId               String   @db.Uuid
+  type                  String   @default("class") // class, company, team, community
+  settings              Json     @default("{}")
+  modelSettings         Json     @default("{\"mode\": \"all\", \"defaultModel\": null, \"excludedModels\": [], \"includedModels\": []}")
+  signupMode            String   @default("approval") // closed, open, approval
+  allowedEmailDomain    String?
+  autoInstallTemplates  String[] @default([]) // Array of template IDs
+  joinInstructions      String?  // Instructions for users joining the space
+  badgeIcon             String?  // Lucide icon name for space badge display
+  defaultTokenPlanId    String?  @db.Uuid // Default token plan for new members
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  // Relations
+  owner            User              @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  members          SpaceMembers[]
+  templates        Template[]        @relation("SpaceTemplates")
+  configs          Config[]          @relation("SpaceConfigs")
+  customModels     CustomModel[]     @relation("SpaceCustomModels")
+  tokenPlans       SpaceTokenPlan[]
+  tokenUsages      SpaceTokenUsage[]
+  defaultTokenPlan SpaceTokenPlan?   @relation("DefaultPlanForSpace", fields: [defaultTokenPlanId], references: [id], onDelete: SetNull, onUpdate: Restrict)
+
+  @@index([ownerId])
+  @@index([slug])
+  @@index([defaultTokenPlanId])
+}
+
+model SpaceMembers {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  spaceId   String   @db.Uuid
+  userId    String   @db.Uuid
+  role      String   @default("member") // owner, admin, member
+  status    String   @default("pending") // pending, active, suspended
+  tokenPlanId String? @db.Uuid // Specific token plan for this member (overrides default)
+  joinedAt  DateTime @default(now())
+
+  // Relations
+  space     Spaces          @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenPlan SpaceTokenPlan? @relation(fields: [tokenPlanId], references: [id])
+
+  @@unique([spaceId, userId])
+  @@index([spaceId])
+  @@index([userId])
+  @@index([tokenPlanId])
+}
+
+model SpaceTokenPlan {
+  id           String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  spaceId      String              @db.Uuid
+  name         String
+  tokenLimit   Int
+  cadence      TokenCadence        @default(MONTHLY)
+  priceCents   Int                 @default(0)
+  isActive     Boolean             @default(true)
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  
+  // Relations
+  space             Spaces              @relation(fields: [spaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  members           SpaceMembers[]
+  defaultForSpaces  Spaces[]            @relation("DefaultPlanForSpace")
+  
+  @@unique([spaceId, name])
+  @@index([spaceId])
+}
+
+model SpaceTokenUsage {
+  id                 String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  spaceId            String          @db.Uuid
+  userId             String          @db.Uuid
+  periodStartDate    DateTime        @db.Timestamptz(6)
+  periodEndDate      DateTime        @db.Timestamptz(6)
+  tokensUsedInPeriod Int             @default(0)
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+  
+  // Relations
+  space              Spaces          @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  user               User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([spaceId, userId])
+  @@index([spaceId])
+  @@index([userId])
+}
+
+enum TokenCadence {
+  WEEKLY
+  MONTHLY
+}

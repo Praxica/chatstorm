@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+
+# Next.js
+.next/
+out/
+
+# Build
+dist/
+
+# Environment variables
+.env*
+!.env.example
+
+# TypeScript
+*.tsbuildinfo
+
+# Testing
+coverage/
+.nyc_output/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.cursor/
+.idea/
+.vscode/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Misc
+*.tgz
+.npm
+.eslintcache
+
+# clerk configuration (can include secrets)
+/.clerk/

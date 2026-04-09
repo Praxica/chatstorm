@@ -28,34 +28,52 @@ Structured multi-agent AI conversations with round-based interactions and config
 - Node.js 18+
 - PostgreSQL
 - Docker (required for integration tests)
+- [Clerk](https://clerk.com) account (authentication)
+- At least one AI provider API key (Anthropic, OpenAI, Google, DeepSeek, Groq, or xAI)
+- [Resend](https://resend.com) account (optional, for email features)
 
 ### Installation
 
 ```bash
-git clone https://github.com/heyrbg/chatstorm.git
+git clone https://github.com/praxica/chatstorm.git
 cd chatstorm
 npm install
 ```
 
 ### Environment
 
-Copy `.env` and fill in the required values:
+Copy `.env.example` and fill in the required values:
 
 ```bash
-cp .env .env.local
+cp .env.example .env.local
 ```
 
-Required variables:
+**Required:**
 
-```
-DATABASE_URL=postgresql://...
-NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_...
-CLERK_SECRET_KEY=sk_...
-ANTHROPIC_API_KEY=sk-ant-...
-OPENAI_API_KEY=sk-...
-```
+| Variable | Description |
+|---|---|
+| `DATABASE_URL` | PostgreSQL connection string |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Clerk publishable key |
+| `CLERK_SECRET_KEY` | Clerk secret key |
+| `SIGNING_SECRET` | Clerk webhook signing secret |
 
-Add additional provider keys (Google, DeepSeek, Groq, xAI) as needed.
+**AI Providers** (at least one required):
+
+| Variable | Provider |
+|---|---|
+| `ANTHROPIC_API_KEY` | Anthropic (Claude) |
+| `OPENAI_API_KEY` | OpenAI |
+| `GOOGLE_GENERATIVE_AI_API_KEY` | Google (Gemini) |
+| `DEEPSEEK_API_KEY` | DeepSeek |
+| `XAI_API_KEY` | xAI (Grok) |
+
+**Optional:**
+
+| Variable | Description |
+|---|---|
+| `DATABASE_URL_UNPOOLED` | Direct PostgreSQL connection (for migrations) |
+| `WEBHOOK_SECRET` | Webhook verification secret |
+| `RESEND_API_KEY` | Resend API key for email features |
 
 ### Database Setup
 
